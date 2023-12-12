@@ -6,7 +6,7 @@ from dhl_sdk.authentication import APIKeyAuthentication
 from dhl_sdk.client import Client
 
 from dhl_sdk.crud import Result
-from dhl_sdk.entities import Model, Project, Variable
+from dhl_sdk.entities import CultivationModel, Project, SpectraModel, Variable
 
 
 class TestProjectEntity(unittest.TestCase):
@@ -18,13 +18,13 @@ class TestProjectEntity(unittest.TestCase):
                     "id": "id-123",
                     "name": "project 1",
                     "description": "description 1",
-                    "processUnitId": "unit1",
+                    "processUnitId": "373c173a-1f23-4e56-874e-90ca4702ec0d",
                 },
                 {
                     "id": "id-456",
                     "name": "project 2",
                     "description": "description 2",
-                    "processUnitId": "Unit1",
+                    "processUnitId": "373c173a-1f23-4e56-874e-90ca4702ec0d",
                 },
             ],
             headers={"x-total-count": "2"},
@@ -37,7 +37,9 @@ class TestProjectEntity(unittest.TestCase):
         self.assertEqual(len(projects), 2)
         self.assertEqual(projects[0].id, "id-123")
         self.assertEqual(projects[0].name, "project 1")
-        self.assertEqual(projects[1].process_unit_id, "Unit1")
+        self.assertEqual(
+            projects[1].process_unit_id, "373c173a-1f23-4e56-874e-90ca4702ec0d"
+        )
 
     def test_projects_result(self):
         project_requests = Project.requests(self.client)
@@ -133,9 +135,22 @@ class TestEntitiesRequests(unittest.TestCase):
         )
 
     @patch("requests.Session.get")
-    def test_get_models_result(self, mock_get):
-        model_requests = Model.requests(self.client)
-        result = Result[Model](0, 5, {}, model_requests)
+    def test_get_spectramodels_result(self, mock_get):
+        model_requests = SpectraModel.requests(self.client)
+        result = Result[SpectraModel](0, 5, {}, model_requests)
+
+        with self.assertRaises(StopIteration):
+            next(result)
+
+        mock_get.assert_called_once_with(
+            "https://test.com/api/db/v2/pipelineJobs?offset=0&limit=5&archived=false&sortBy[createdAt]=desc",
+            headers={"Authorization": "ApiKey test_auth_key"},
+        )
+
+    @patch("requests.Session.get")
+    def test_get_cultivationmodels_result(self, mock_get):
+        model_requests = CultivationModel.requests(self.client)
+        result = Result[SpectraModel](0, 5, {}, model_requests)
 
         with self.assertRaises(StopIteration):
             next(result)

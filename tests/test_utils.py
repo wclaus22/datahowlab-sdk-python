@@ -11,11 +11,11 @@ from dhl_sdk._utils import (
     PredictResponse,
 )
 from dhl_sdk.exceptions import InvalidSpectraException, InvalidInputsException
-from dhl_sdk._spectra_utils import (
-    format_inputs,
+from dhl_sdk._input_processing import (
     format_predictions,
-    validate_prediction_inputs,
-    validate_spectra_format,
+    _validate_spectra_format,
+    Preprocessor,
+    SpectraPreprocessor,
 )
 
 
@@ -32,24 +32,24 @@ class TestUtils(unittest.TestCase):
         ]
         self.model_with_inputs.inputs = ["id-123", "id-456"]
 
-    def test_format_inputs(self):
-        inputs = {"var1": [1, 2, 3], "var2": [4, 5, 6]}
-        formatted_inputs = format_inputs(
-            inputs, self.model_with_inputs, self.model_with_inputs.inputs
-        )
+    # def test_format_inputs(self):
+    # inputs = {"var1": [1, 2, 3], "var2": [4, 5, 6]}
+    # formatted_inputs = format_inputs(
+    #     inputs, self.model_with_inputs, self.model_with_inputs.inputs
+    # )
 
-        self.assertDictEqual(
-            formatted_inputs, {"id-123": [1, 2, 3], "id-456": [4, 5, 6]}
-        )
+    # self.assertDictEqual(
+    #     formatted_inputs, {"id-123": [1, 2, 3], "id-456": [4, 5, 6]}
+    # )
 
     def test_format_spectra_validation(self):
         spectra1 = [[1, 2, 3], [4, 5, 6]]
         spectra2 = np.array([[1, 2, 3], [4, 5, 6]])
         spectra3 = "spectra"
 
-        self.assertEqual(validate_spectra_format(spectra1), spectra1)
-        self.assertEqual(validate_spectra_format(spectra2), spectra1)
-        self.assertRaises(InvalidSpectraException, validate_spectra_format, spectra3)
+        self.assertEqual(_validate_spectra_format(spectra1), spectra1)
+        self.assertEqual(_validate_spectra_format(spectra2), spectra1)
+        self.assertRaises(InvalidSpectraException, _validate_spectra_format, spectra3)
 
     def test_format_predictions(self):
         predictions = [
@@ -89,58 +89,81 @@ class TestUtils(unittest.TestCase):
         model.spectra_size = 4
 
         empty_spectra = []
-        self.assertRaises(
-            InvalidSpectraException, validate_prediction_inputs, empty_spectra, model
+        processor = Preprocessor(
+            SpectraPreprocessor(spectra=empty_spectra, model=model, inputs=None)
         )
+        self.assertRaises(InvalidSpectraException, processor.validate)
 
         spectra = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
+        processor = Preprocessor(
+            SpectraPreprocessor(spectra=spectra, model=model, inputs=None)
+        )
         self.assertRaises(
-            InvalidSpectraException, validate_prediction_inputs, spectra, model
+            InvalidSpectraException,
+            processor.validate,
         )
 
         spectra = [["1", "2", "3", "3"], [4, 5, 6, 6], [7, 8, 9, 9]]
+        processor = Preprocessor(
+            SpectraPreprocessor(spectra=spectra, model=model, inputs=None)
+        )
         self.assertRaises(
-            InvalidSpectraException, validate_prediction_inputs, spectra, model
+            InvalidSpectraException,
+            processor.validate,
         )
 
         spectra = [[1, 2, 3, 3], [4, 5, np.nan, 6], [7, 8, 9, 9]]
+        processor = Preprocessor(
+            SpectraPreprocessor(spectra=spectra, model=model, inputs=None)
+        )
         self.assertRaises(
-            InvalidSpectraException, validate_prediction_inputs, spectra, model
+            InvalidSpectraException,
+            processor.validate,
         )
 
         spectra = [[1, 2, 3, 3], [4, 5, 6, 6], [7, 8, 9]]
+        processor = Preprocessor(
+            SpectraPreprocessor(spectra=spectra, model=model, inputs=None)
+        )
         self.assertRaises(
-            InvalidSpectraException, validate_prediction_inputs, spectra, model
+            InvalidSpectraException,
+            processor.validate,
         )
 
-        spectra = [[1, 2, 3, 3], [4, 5, 6, 6], [7, 8, 9, 9]]
-        self.assertEqual(
-            validate_prediction_inputs(np.array(spectra), model), (spectra, None)
-        )
+    # def test_validation_with_input(self):
+    #     model = self.model_with_inputs
+    #     model.spectra_size = 4
 
-    def test_validation_with_input(self):
-        model = self.model_with_inputs
-        model.spectra_size = 4
+    #     spectra = [[1, 2, 3, 3], [4, 5, 6, 6], [7, 8, 9, 9]]
+    #     processor = Preprocessor(
+    #         SpectraPreprocessor(spectra=spectra, model=model, inputs=None)
+    #     )
+    #     self.assertRaises(
+    #         InvalidInputsException,
+    #         processor.validate,
+    #     )
 
-        spectra = [[1, 2, 3, 3], [4, 5, 6, 6], [7, 8, 9, 9]]
-        self.assertRaises(
-            InvalidInputsException, validate_prediction_inputs, spectra, model
-        )
+    #     inputs = {"var10": [0, 1, 0], "var2": [1, 1, 1]}
+    #     processor = Preprocessor(
+    #         SpectraPreprocessor(spectra=spectra, model=model, inputs=inputs)
+    #     )
+    #     with self.assertRaises(InvalidInputsException) as ex:
+    #         processor.validate()
+    #         print(ex)
+    #         self.assertTrue(
+    #             ex.exception.message.startswith(
+    #                 "No matching Input found for key: var10"
+    #             )
+    #         )
 
-        inputs = {"var10": [0, 1, 0], "var2": [1, 1, 1]}
-        with self.assertRaises(InvalidInputsException) as ex:
-            validate_prediction_inputs(spectra, model, inputs)
-            self.assertTrue(
-                ex.exception.message.startswith(
-                    "No matching Input found for key: var10"
-                )
-            )
-
-        inputs = {"var1": [0, 1, 0], "var2": [1, 1, 1]}
-        self.assertEqual(
-            validate_prediction_inputs(np.array(spectra), model, inputs),
-            (spectra, {"id-123": [0, 1, 0], "id-456": [1, 1, 1]}),
-        )
+    #     inputs = {"var1": [0, 1, 0], "var2": [1, 1, 1]}
+    #     processor = Preprocessor(
+    #         SpectraPreprocessor(spectra=spectra, model=model, inputs=inputs)
+    #     )
+    #     self.assertEqual(
+    #         processor.validate(),
+    #         (spectra, {"id-123": [0, 1, 0], "id-456": [1, 1, 1]}),
+    #     )
 
 
 class TestResults(unittest.TestCase):

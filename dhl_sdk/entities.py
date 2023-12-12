@@ -16,19 +16,23 @@ from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
 from dhl_sdk.crud import Result, Client, CRUDClient
 from dhl_sdk.exceptions import ModelPredictionException
-from dhl_sdk._utils import PredictResponse
-from dhl_sdk._spectra_utils import (
+from dhl_sdk._utils import PredictResponse, get_id_list
+from dhl_sdk._input_processing import (
     SpectraData,
     SpectraPrediction,
-    convert_to_request,
+    GroupCode,
+    CultivationPreprocessor,
+    Preprocessor,
+    SpectraPreprocessor,
     format_predictions,
-    validate_prediction_inputs,
 )
 
 PROJECTS_URL = "api/db/v2/projects"
 DATASETS_URL = "api/db/v2/datasets"
 VARIABLES_URL = "api/db/v2/variables"
 MODELS_URL = "api/db/v2/pipelineJobs"
+TEMPLATES_URL = "api/db/v2/pipelineJobTemplates"
+PREDICT_URL = "api/pipeline/v1/predictors"
 
 
 class Variable(BaseModel):
@@ -38,11 +42,15 @@ class Variable(BaseModel):
     name: str = Field(alias="name")
     code: str = Field(alias="code")
     variant: str = Field(alias="variant")
+    group_code: Optional[GroupCode] = None
     size: Optional[int] = None
 
     @model_validator(mode="before")
     @classmethod
-    def _validate_size(cls, data) -> dict:
+    def _validate_model_struct(cls, data) -> dict:
+        """Validate the structure of the variable"""
+        data["group_code"] = data.get("group", {}).get("code", None)
+
         if data["variant"] == "spectrum":
             try:
                 size = data["spectrum"]["xAxis"]["dimension"]
@@ -67,6 +75,7 @@ class Variable(BaseModel):
 
     @staticmethod
     def requests(client: Client) -> CRUDClient["Variable"]:
+        # pylint: disable=missing-function-docstring
         return CRUDClient["Variable"](client, VARIABLES_URL, Variable)
 
 
@@ -110,6 +119,7 @@ class Dataset(BaseModel):
 
     @staticmethod
     def requests(client: Client) -> CRUDClient["Dataset"]:
+        # pylint: disable=missing-function-docstring
         return CRUDClient["Dataset"](client, DATASETS_URL, Dataset)
 
 
@@ -119,21 +129,31 @@ class Model(BaseModel):
     id: str = Field(alias="id")
     name: str = Field(alias="name")
     status: str = Field(alias="status")
+    project_id: str = Field(alias="projectId")
     config: dict = Field(alias="config")
     dataset: Dataset = Field(alias="dataset")
-    project_id: str = Field(alias="projectId")
     _client: Client = PrivateAttr()
-    _spectra_size: Optional[int] = PrivateAttr(default=None)
-
-    def __init__(self, **data):
-        super().__init__(**data)
-        self._client = data["client"]
 
     @model_validator(mode="before")
     @classmethod
     def _validate_model_data(cls, data) -> dict:
         data["dataset"] = Dataset(**data["dataset"], client=data["client"])
         return data
+
+    @property
+    def success(self) -> bool:
+        """Get the success status of the model"""
+        return self.status == "success"
+
+
+class SpectraModel(Model):
+    """Pydantic Model for Spectra Prediction Model from the API"""
+
+    _spectra_size: Optional[int] = PrivateAttr(default=None)
+
+    def __init__(self, **data):
+        super().__init__(**data)
+        self._client = data["client"]
 
     def predict(
         self,
@@ -175,12 +195,12 @@ class Model(BaseModel):
                 f"{self.name} is not ready for prediction. The current status is {self.status}"
             )
 
-        spectra, inputs = validate_prediction_inputs(
-            spectra=spectra, model=self, inputs=inputs
+        data_processing_strategy = SpectraPreprocessor(
+            spectra=spectra, inputs=inputs, model=self
         )
-        json_data = convert_to_request(spectra=spectra, model=self, inputs=inputs)
+        json_data = Preprocessor(data_processing_strategy).convert_to_request()
 
-        predict_url = f"api/pipeline/v1/predictors/{self.id}/predict"
+        predict_url = f"{PREDICT_URL}/{self.id}/predict"
 
         predictions = []
         for prediction_data in json_data:
@@ -210,11 +230,6 @@ class Model(BaseModel):
         return self.config["groups"]["Outputs"]
 
     @property
-    def success(self) -> bool:
-        """Get the success status of the model"""
-        return self.status == "success"
-
-    @property
     def spectra_size(self) -> int:
         """Get the size of the spectra"""
         if self._spectra_size is None:
@@ -227,8 +242,64 @@ class Model(BaseModel):
         return spectrum.size
 
     @staticmethod
-    def requests(client: Client) -> CRUDClient["Model"]:
-        return CRUDClient["Model"](client, MODELS_URL, Model)
+    def requests(client: Client) -> CRUDClient["SpectraModel"]:
+        # pylint: disable=missing-function-docstring
+        return CRUDClient["SpectraModel"](client, MODELS_URL, SpectraModel)
+
+
+class CultivationModel(Model):
+    """Pydantic Model for Cultivation Prediction Model from the API"""
+
+    def __init__(self, **data):
+        super().__init__(**data)
+        self._client = data["client"]
+
+    def predict(
+        self, timestamps: list, variables: dict, timestamps_unit: str = "s"
+    ) -> dict:
+        """Prediction for CultivationModel"""
+
+        if not self.success:
+            raise ModelPredictionException(
+                f"{self.name} is not ready for prediction. The current status is {self.status}"
+            )
+
+        data_processing_strategy = CultivationPreprocessor(
+            timestamps=timestamps,
+            timestamps_unit=timestamps_unit,
+            inputs=variables,
+            model=self,
+        )
+        json_data = Preprocessor(data_processing_strategy).convert_to_request()
+
+        predict_url = f"{PREDICT_URL}/{self.id}/predict"
+
+        predictions = []
+        for prediction_data in json_data:
+            try:
+                response = self._client.post(predict_url, prediction_data)
+
+                # in case of an error in the response (not HTTP)
+                if "error" in response.json():
+                    raise ValueError(response.json()["error"])
+
+            except Exception as ex:
+                raise ex
+
+            predictions.append(PredictResponse(**response.json()))
+
+        return format_predictions(predictions, model=self)
+
+    @staticmethod
+    def requests(client: Client) -> CRUDClient["CultivationModel"]:
+        # pylint: disable=missing-function-docstring
+        return CRUDClient["CultivationModel"](client, MODELS_URL, CultivationModel)
+
+
+MODEL_MAP = {
+    "373c173a-1f23-4e56-874e-90ca4702ec0d": SpectraModel,
+    "04a324da-13a5-470b-94a1-bda6ac87bb86": CultivationModel,
+}
 
 
 class Project(BaseModel):
@@ -247,13 +318,28 @@ class Project(BaseModel):
     def get_models(self, offset: int = 0, name: Optional[str] = None) -> Result[Model]:
         """Get the models of the project from the API"""
 
-        models = Model.requests(self._client)
+        model_type = MODEL_MAP[self.process_unit_id]
 
         query_params = {"filterBy[projectId]": self.id}
         if name is not None:
             query_params.update({"filterBy[name]": name})
 
-        results = Result[Model](
+        if model_type is not SpectraModel:
+            # get templateIds for propagation models
+            template_query_params = {
+                "filterByTag[type]": "propagation",
+                "archived": "any",
+            }
+            template_list = self._client.get(
+                TEMPLATES_URL, template_query_params
+            ).json()
+            template_ids = get_id_list(template_list)
+
+            query_params.update({"filterBy[templateId]": "|".join(template_ids)})
+
+        models = model_type.requests(self._client)
+
+        results = Result[model_type](
             offset=offset,
             limit=5,
             query_params=query_params,
@@ -263,4 +349,5 @@ class Project(BaseModel):
 
     @staticmethod
     def requests(client: Client) -> CRUDClient["Project"]:
+        # pylint: disable=missing-function-docstring
         return CRUDClient["Project"](client, PROJECTS_URL, Project)

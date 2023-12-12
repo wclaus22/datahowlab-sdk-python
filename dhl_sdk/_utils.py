@@ -56,3 +56,8 @@ def validate_list_elements(arr: list) -> bool:
         or np.isinf(item)
         for item in arr
     )
+
+
+def get_id_list(json_list: list[dict]) -> list[str]:
+    """Extracts the id from a list of dictionaries"""
+    return [item["id"] for item in json_list]

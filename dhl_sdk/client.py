@@ -11,7 +11,7 @@ Classes:
 """
 
 
-from typing import Optional, Dict, Any
+from typing import Literal, Optional, Dict, Any
 from urllib.parse import urlencode
 
 from requests import Response
@@ -27,6 +27,10 @@ from dhl_sdk._utils import urljoin
 
 
 SPECTRA_UNIT_ID = "373c173a-1f23-4e56-874e-90ca4702ec0d"
+UNIT_ID_MAP = {
+    "cultivation": "04a324da-13a5-470b-94a1-bda6ac87bb86",
+    # Add other unit ids here
+}
 
 
 class Client:
@@ -212,4 +216,55 @@ class SpectraHowClient:
             name=name,
             offset=offset,
             unit_id=SPECTRA_UNIT_ID,
+        )
+
+
+class DataHowLabClient:
+    """Client for the DHL API
+
+    Parameters
+    ----------
+    auth_key : APIKeyAuthentication
+        An instance of the APIKeyAuthentication class containing the user's API key."""
+
+    def __init__(self, auth_key: APIKeyAuthentication, base_url: str):
+        self._client = Client(auth_key, base_url)
+
+    def get_projects(
+        self,
+        name: str = None,
+        offset: int = 0,
+        project_type: Literal["cultivation"] = "cultivation",
+    ) -> Result[Project]:
+        """
+        Retrieves an iterable of Spectra projects from the DHL API.
+
+        Parameters
+        ----------
+        name : str, optional
+            A string to filter projects by name.
+        offset : int, optional
+            An integer representing the number of projects to skip before returning results.
+        project_type : Literal["cultivation", "cell selection", "polishing"], optional
+            The type of project to retrieve, by default None
+
+        Returns
+        -------
+        Result
+            An Iterable object containing the retrieved projects
+        """
+
+        if project_type is not None:
+            if project_type not in UNIT_ID_MAP:
+                raise ValueError(
+                    f"Type must be one of {list(UNIT_ID_MAP.keys())}, but got '{project_type}'"
+                )
+            unit_id = UNIT_ID_MAP[project_type]
+        else:
+            unit_id = None
+
+        return self._client.get_projects(
+            name=name,
+            offset=offset,
+            unit_id=unit_id,
         )
