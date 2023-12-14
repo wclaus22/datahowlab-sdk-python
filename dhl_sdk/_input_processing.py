@@ -149,6 +149,11 @@ class SpectraPreprocessor(PreprocessorStrategy):
                 )
             return True
 
+        if len(self.model.inputs) == 0:
+            raise InvalidInputsException(
+                "The model does not require inputs, but some were provided."
+            )
+
         # validate inputs with spectra inputs (number of lines)
         for key, value in self.inputs.items():
             if len(value) != n_spectra:
@@ -213,7 +218,7 @@ class CultivationPreprocessor(PreprocessorStrategy):
 
     timestamps: list[int]
     timestamps_unit: str
-    inputs: Optional[dict]
+    inputs: Optional[Union[list[dict], dict]]
     model: CultivationModel
 
     def validate(self) -> bool:
@@ -276,13 +281,18 @@ class CultivationPreprocessor(PreprocessorStrategy):
                     ]
                     break
 
-        instances = [[]]
+        instances = []
 
-        for variable in input_variables:
-            if variable.id in formatted_inputs:
-                instances[0].append(formatted_inputs[variable.id])
-            else:
-                instances[0].append({"values": None, "timestamps": None})
+        if not isinstance(self.inputs, list):
+            self.inputs = [self.inputs]
+
+        for i, _ in enumerate(self.inputs):
+            instances.append([])
+            for variable in input_variables:
+                if variable.id in formatted_inputs:
+                    instances[i].append(formatted_inputs[variable.id])
+                else:
+                    instances[i].append({"values": None, "timestamps": None})
 
         json_data = {"instances": instances, "config": {"startingIndex": 0}}
 
@@ -329,6 +339,14 @@ def _validate_upstream_timestamps(
             "Timestamps must be a list of at least 2 values"
         )
 
+    # Validate if timestamps are valid numeric values
+    if not all(
+        isinstance(value, (int, float)) and math.isfinite(value) for value in timestamps
+    ):
+        raise InvalidTimestampsException(
+            "All values of timestamps must be valid numeric values"
+        )
+
     # Validate if timestamps are in ascending order
     if all(timestamps[i] >= timestamps[i + 1] for i in range(len(timestamps) - 1)):
         raise InvalidTimestampsException("Timestamps must be in ascending order")
@@ -340,14 +358,6 @@ def _validate_upstream_timestamps(
     # Validate if timestamps are unique
     if len(timestamps) != len(set(timestamps)):
         raise InvalidTimestampsException("Timestamps must be unique")
-
-    # Validate if timestamps are valid numeric values
-    if not all(
-        isinstance(value, (int, float)) and math.isfinite(value) for value in timestamps
-    ):
-        raise InvalidTimestampsException(
-            "All values of timestamps must be valid numeric values"
-        )
 
     # Convert timestamps to seconds
     if timestamps_unit in ("s", "sec", "secs", "seconds"):
@@ -367,7 +377,7 @@ def _validate_upstream_timestamps(
         )
 
 
-def _validate_upstream_inputs(inputs: dict[str, list]):
+def _validate_upstream_inputs(inputs: Union[dict[str, list], list[dict[str, list]]]):
     """
     Validate the inputs for upstream prediction.
     The function checks if the inputs are a dictionary and if all values are lists.
@@ -375,27 +385,42 @@ def _validate_upstream_inputs(inputs: dict[str, list]):
     Parameters
     ----------
     inputs : dict[str, list]
-        A dictionary where keys are variable codes, and values are lists of inputs.
+        A dictionary, or list of dictionaries, where keys are variable codes,
+        and values are lists of inputs.
 
     Raises
     ------
     InvalidInputsException
         If inputs do not meet the specified criteria.
-
     """
-    # Validate types
-    if not isinstance(inputs, dict):
+
+    if inputs is None:
         raise InvalidInputsException(
-            "Inputs must be a dictionary of lists, with the variable code as key"
+            "No Inputs provided. Please provide a dictionary of inputs"
         )
 
-    # Validate if inputs are lists
-    if not all(isinstance(value, list) for value in inputs.values()):
-        raise InvalidInputsException("All input values must be lists")
+    def validate_single_input(single_input: dict[str, list]):
+        # Validate types
+        if not isinstance(single_input, dict):
+            raise InvalidInputsException(
+                "Inputs must be a dictionary of lists, with the variable code as key"
+            )
+
+        # Validate if inputs are lists
+        if not all(isinstance(value, list) for value in single_input.values()):
+            raise InvalidInputsException("All input values must be lists")
+
+    if isinstance(inputs, list):
+        for single_input in inputs:
+            validate_single_input(single_input)
+    else:
+        validate_single_input(inputs)
 
 
 def _validate_with_variables(
-    timestamps: list[int], inputs: dict[str, list], model: CultivationModel
+    timestamps: list[int],
+    inputs: Union[dict[str, list], list[dict[str, list]]],
+    model: CultivationModel,
 ):
     """
     Validate the inputs based on the provided timestamps and model.
@@ -417,46 +442,55 @@ def _validate_with_variables(
 
     model_variables = model.dataset.variables
 
-    for variable in model_variables:
-        if variable.code in inputs:
-            if variable.group_code.is_timedependent():
-                # Validate if inputs and timestamps are the same length
-                if len(inputs[variable.code]) != len(timestamps):
-                    raise InvalidInputsException(
-                        (
-                            f"The recipe requires {variable.code} to be complete,"
-                            f"so it must have the same length as timestamps"
+    def validate_input_vars(
+        single_input: dict[str, list], model_variables=model_variables
+    ):
+        for variable in model_variables:
+            if variable.code in inputs:
+                if variable.group_code.is_timedependent():
+                    # Validate if inputs and timestamps are the same length
+                    if len(single_input[variable.code]) != len(timestamps):
+                        raise InvalidInputsException(
+                            (
+                                f"The recipe requires {variable.code} to be complete,"
+                                f"so it must have the same length as timestamps"
+                            )
                         )
-                    )
 
-                # Validate if inputs are valid numeric values
-                if not all(
-                    isinstance(value, (int, float)) and math.isfinite(value)
-                    for value in inputs[variable.code]
-                ):
-                    raise InvalidInputsException(
-                        f"All values of input {variable.code} must be valid numeric values"
-                    )
+                    # Validate if inputs are valid numeric values
+                    if not all(
+                        isinstance(value, (int, float)) and math.isfinite(value)
+                        for value in single_input[variable.code]
+                    ):
+                        raise InvalidInputsException(
+                            f"All values of input {variable.code} must be valid numeric values"
+                        )
+
+                else:
+                    # validate if non time dependent inputs have length of 1 (only initial values)
+                    if len(single_input[variable.code]) != 1:
+                        raise InvalidInputsException(
+                            (
+                                f"Input {variable.code} is only requires initial "
+                                f"values, so it must have a length of 1"
+                            )
+                        )
 
             else:
-                # validate if non time dependent inputs have length of 1 (only initial values)
-                if len(inputs[variable.code]) != 1:
+                # validate if missing value is an Y Variable
+                if not variable.group_code.is_output():
                     raise InvalidInputsException(
                         (
-                            f"Input {variable.code} is only requires initial"
-                            f"values, so it must have a length of 1"
+                            f"Input {variable.code} is a {variable.group_code.name} "
+                            f"Variable, so it must be provided"
                         )
                     )
 
-        else:
-            # validate if missing value is an Y Variable
-            if not variable.group_code.is_output():
-                raise InvalidInputsException(
-                    (
-                        f"Input {variable.code} is a {variable.group_code.name}"
-                        f"Variable, so it must be provided"
-                    )
-                )
+    if isinstance(inputs, list):
+        for single_input in inputs:
+            validate_input_vars(single_input)
+    else:
+        validate_input_vars(inputs)
 
 
 def format_predictions(

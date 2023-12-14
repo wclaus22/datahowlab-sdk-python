@@ -113,7 +113,7 @@ def _convert_to_request(
                         instance[index] = Instance(
                             values=input_values[i : i + batch_size]
                         )
-                    break
+                        break
 
         json_data = PredictRequest(instances=[instance]).model_dump(by_alias=True)
         request_data.append(json_data)

@@ -25,7 +25,7 @@ For more detailed installation instructions, you can refer to the [Poetry docume
 
 ```bash
 # Example code for installation
-$ git clone https://github.com/DataHow/DHL_SDK.git
+$ git clone https://github.com/DataHow/datahowlab-sdk-python.git
 $ cd your-repo
 ```
 
