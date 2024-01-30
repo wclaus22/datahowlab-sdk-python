@@ -2,7 +2,7 @@
 validation and formatting in the SDK
 """
 
-from typing import Optional, Protocol, Union, Dict, List
+from typing import Optional, Protocol, Union
 
 import numpy as np
 
@@ -15,9 +15,20 @@ from dhl_sdk.exceptions import InvalidSpectraException
 
 # Type Aliases
 SpectraData = Union[
-    list[list[float]], np.ndarray[(int, int), Union[np.float32, np.float64]]
+    list[list[float]],
+    np.ndarray[tuple[int, int], Union[np.dtype[np.float32], np.dtype[np.float64]]],
 ]
-SpectraPrediction = Dict[str, List[float]]
+
+
+class Dataset(Protocol):
+    # pylint: disable=missing-class-docstring
+    # pylint: disable=missing-function-docstring
+    @property
+    def variables(self) -> list:
+        ...
+
+    def get_spectrum_index(self) -> int:
+        ...
 
 
 class SpectraModel(Protocol):
@@ -28,7 +39,7 @@ class SpectraModel(Protocol):
         ...
 
     @property
-    def dataset(self) -> list[str]:
+    def dataset(self) -> Dataset:
         ...
 
     @property
@@ -58,6 +69,7 @@ def _validate_spectra_format(spectra: SpectraData) -> list[list[float]]:
 
     if isinstance(spectra, np.ndarray):
         spectra = spectra.tolist()
+
     elif isinstance(spectra, list):
         pass
     else:
@@ -69,7 +81,7 @@ def _validate_spectra_format(spectra: SpectraData) -> list[list[float]]:
 
 
 def _convert_to_request(
-    spectra: list[list[float]],
+    spectra: SpectraData,
     model: SpectraModel,
     inputs: Optional[dict] = None,
     batch_size: int = 50,

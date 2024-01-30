@@ -11,7 +11,7 @@ Classes:
 """
 
 from collections import deque
-from typing import Any, Generic, TypeVar, Dict, Protocol, Optional
+from typing import Any, Generic, TypeVar, Protocol, Optional
 
 from requests import Response
 
@@ -20,7 +20,7 @@ class Client(Protocol):
     def post(self, path: str, json_data: Any) -> Response:
         ...
 
-    def get(self, path: str, query_params: Optional[Dict[str, str]] = None) -> Response:
+    def get(self, path: str, query_params: Optional[dict[str, str]] = None) -> Response:
         ...
 
 
@@ -29,7 +29,7 @@ T = TypeVar("T")
 
 class Constructor(Protocol[T]):
     def __call__(self, **kwargs) -> T:
-        pass
+        ...
 
 
 class CRUDClient(Generic[T]):
@@ -48,8 +48,8 @@ class CRUDClient(Generic[T]):
         return entity
 
     def list(
-        self, offset: int, limit: int, query_params: Optional[Dict[str, str]] = None
-    ) -> (list[T], int):
+        self, offset: int, limit: int, query_params: Optional[dict[str, str]] = None
+    ) -> tuple[list[T], int]:
         query_params = query_params or {}
         query_params |= {
             "offset": str(offset),
@@ -73,10 +73,10 @@ class Result(Generic[T]):
 
     def __init__(
         self,
-        offset: int,
         limit: int,
-        query_params: Dict[str, str],
+        query_params: dict[str, str],
         requests: CRUDClient[T],
+        offset: int = 0,
     ):
         self._data = deque()
         self.limit = limit

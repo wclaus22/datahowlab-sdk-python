@@ -1,15 +1,17 @@
+# pylint: disable=missing-docstring
 import unittest
 from unittest.mock import patch
 
-from dhl_sdk.client import Client
+from dhl_sdk.client import PredictionClient
 from dhl_sdk.authentication import APIKeyAuthentication
+from dhl_sdk.entities import CultivationProject
 
 
 class TestClient(unittest.TestCase):
     def setUp(self):
         self.auth_key = APIKeyAuthentication("test_auth_key")
         self.base_url = "https://test.com"
-        self.client = Client(self.auth_key, self.base_url)
+        self.client = PredictionClient(self.auth_key, self.base_url)
 
     def test_init(self):
         self.assertEqual(self.client.auth_key, self.auth_key)
@@ -43,11 +45,12 @@ class TestClient(unittest.TestCase):
         with self.assertRaises(StopIteration):
             # it should raise an error since there is no data
             result = self.client.get_projects(
+                project_type=CultivationProject,
                 offset=offset,
                 name=name,
                 unit_id=unit_id,
             )
-            project = next(result)
+            _ = next(result)
 
         mock_get.assert_called_once_with(
             "api/db/v2/projects",

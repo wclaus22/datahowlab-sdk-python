@@ -22,7 +22,7 @@ Usage:
     headers, which can be added to your requests.
 
 """
-from typing import Optional, Dict
+from typing import Optional
 import os
 
 
@@ -43,7 +43,7 @@ class APIKeyAuthentication:
     def __init__(self, api_key: Optional[str] = None):
         self.api_key = self._get_api_key(api_key)
 
-    def get_headers(self) -> Dict[str, str]:
+    def get_headers(self) -> dict[str, str]:
         """Get the authorization headers to add to the
         requests using the API Key.
 
@@ -54,7 +54,7 @@ class APIKeyAuthentication:
         """
         return {"Authorization": f"ApiKey {self.api_key}"}
 
-    def _get_api_key(self, api_key: str = None) -> str:
+    def _get_api_key(self, api_key: Optional[str] = None) -> str:
         """Get the API Key from the environment variables
         if not given.
 

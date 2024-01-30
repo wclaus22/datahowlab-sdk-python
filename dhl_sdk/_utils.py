@@ -8,6 +8,9 @@ import numpy as np
 from pydantic import BaseModel, Field, model_validator
 
 
+Predictions = dict[str, list[float]]
+
+
 class Instance(BaseModel):
     """Pydantic class representing the Instance
     It is used to type check the request"""
@@ -15,6 +18,12 @@ class Instance(BaseModel):
     timestamps: Optional[list[float]] = Field(default=None, alias="timestamps")
     sample_id: Optional[list[str]] = Field(default=None, alias="sampleId")
     values: Union[list[float], list[list[float]]]
+    high_values: Optional[Union[list[float], list[list[float]]]] = Field(
+        default=None, alias="highValues"
+    )
+    low_values: Optional[Union[list[float], list[list[float]]]] = Field(
+        default=None, alias="lowValues"
+    )
 
     @model_validator(mode="after")
     def generate_sample_ids(self):

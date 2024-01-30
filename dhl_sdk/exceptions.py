@@ -41,3 +41,11 @@ class InvalidTimestampsException(Exception):
     def __init__(self, message="The timestamps used for prediction are not valid."):
         self.message = message
         super().__init__(self.message)
+
+
+class PredictionRequestException(Exception):
+    """Exception raised when prediction request fails"""
+
+    def __init__(self, message="Prediction request failed."):
+        self.message = message
+        super().__init__(self.message)

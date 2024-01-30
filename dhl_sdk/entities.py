@@ -11,17 +11,23 @@ Classes:
     - Model: Represents a structure for models fetched from the API.
     - Project: Represents a structure for projects retrieved from the API.
 """
-from typing import Optional
+
+from abc import ABC, abstractmethod
+from typing import Literal, Optional, Type
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
 from dhl_sdk.crud import Result, Client, CRUDClient
-from dhl_sdk.exceptions import ModelPredictionException
-from dhl_sdk._utils import PredictResponse, get_id_list
+from dhl_sdk.exceptions import (
+    InvalidInputsException,
+    ModelPredictionException,
+    PredictionRequestException,
+)
+from dhl_sdk._utils import Predictions, PredictResponse, get_id_list
 from dhl_sdk._input_processing import (
     SpectraData,
-    SpectraPrediction,
     GroupCode,
-    CultivationPreprocessor,
+    CultivationPropagationPreprocessor,
+    CultivationHistoricalPreprocessor,
     Preprocessor,
     SpectraPreprocessor,
     format_predictions,
@@ -110,6 +116,21 @@ class Dataset(BaseModel):
 
         return data
 
+    @staticmethod
+    def requests(client: Client) -> CRUDClient["Dataset"]:
+        # pylint: disable=missing-function-docstring
+        return CRUDClient["Dataset"](client, DATASETS_URL, Dataset)
+
+
+class SpectraDataset(Dataset):
+    """Pydantic Model Dataset for Spectra"""
+
+    _client: Client = PrivateAttr()
+
+    def __init__(self, **data):
+        super().__init__(**data)
+        self._client = data["client"]
+
     def get_spectrum_index(self) -> int:
         """Get the index of the spectrum variable"""
         for index, variable in enumerate(self.variables):
@@ -118,12 +139,12 @@ class Dataset(BaseModel):
         raise ValueError("No spectrum variable found in dataset")
 
     @staticmethod
-    def requests(client: Client) -> CRUDClient["Dataset"]:
+    def requests(client: Client) -> CRUDClient["SpectraDataset"]:
         # pylint: disable=missing-function-docstring
-        return CRUDClient["Dataset"](client, DATASETS_URL, Dataset)
+        return CRUDClient["SpectraDataset"](client, DATASETS_URL, SpectraDataset)
 
 
-class Model(BaseModel):
+class Model(BaseModel, ABC):
     """Pydantic Model for Prediction Model from the API"""
 
     id: str = Field(alias="id")
@@ -131,35 +152,69 @@ class Model(BaseModel):
     status: str = Field(alias="status")
     project_id: str = Field(alias="projectId")
     config: dict = Field(alias="config")
-    dataset: Dataset = Field(alias="dataset")
     _client: Client = PrivateAttr()
-
-    @model_validator(mode="before")
-    @classmethod
-    def _validate_model_data(cls, data) -> dict:
-        data["dataset"] = Dataset(**data["dataset"], client=data["client"])
-        return data
 
     @property
     def success(self) -> bool:
         """Get the success status of the model"""
         return self.status == "success"
 
+    @staticmethod
+    @abstractmethod
+    def requests(client: Client) -> CRUDClient["Model"]:
+        """Resquests abstract method for Model Types"""
+
+    def get_predictions(self, preprocessor: Preprocessor) -> dict:
+        """Get the predictions for the model using selected strategy"""
+
+        if preprocessor.validate():
+            json_data = preprocessor.format()
+        else:
+            raise InvalidInputsException(
+                "The provided inputs failed the validation step"
+            )
+
+        predict_url = f"{PREDICT_URL}/{self.id}/predict"
+
+        predictions = []
+        for prediction_data in json_data:
+            try:
+                response = self._client.post(predict_url, prediction_data)
+                response.raise_for_status()
+
+                # in case of an error in the response (not HTTP)
+                if "error" in response.json():
+                    raise PredictionRequestException(response.json()["error"])
+
+            except Exception as ex:
+                raise ex
+
+            predictions.append(PredictResponse(**response.json()))
+
+        return format_predictions(predictions, model=self)
+
 
 class SpectraModel(Model):
     """Pydantic Model for Spectra Prediction Model from the API"""
 
+    dataset: SpectraDataset = Field(alias="dataset")
     _spectra_size: Optional[int] = PrivateAttr(default=None)
 
     def __init__(self, **data):
         super().__init__(**data)
         self._client = data["client"]
 
+    @model_validator(mode="before")
+    @classmethod
+    def _validate_model_data(cls, data) -> dict:
+        data["dataset"] = SpectraDataset(**data["dataset"], client=data["client"])
+        return data
+
     def predict(
         self,
         spectra: SpectraData,
         inputs: Optional[dict] = None,
-    ) -> SpectraPrediction:
+    ) -> Predictions:
         """
         Predicts the output of a given model for a given set of spectra.
 
@@ -195,29 +250,11 @@ class SpectraModel(Model):
                 f"{self.name} is not ready for prediction. The current status is {self.status}"
             )
 
-        data_processing_strategy = SpectraPreprocessor(
+        spectra_processing_strategy = SpectraPreprocessor(
             spectra=spectra, inputs=inputs, model=self
         )
-        json_data = Preprocessor(data_processing_strategy).convert_to_request()
 
-        predict_url = f"{PREDICT_URL}/{self.id}/predict"
-
-        predictions = []
-        for prediction_data in json_data:
-            try:
-                response = self._client.post(predict_url, prediction_data)
-                response.raise_for_status()
-
-                # in case of an error in the response (not HTTP)
-                if "error" in response.json():
-                    raise ValueError(response.json()["error"])
-
-            except Exception as ex:
-                raise ex
-
-            predictions.append(PredictResponse(**response.json()))
-
-        return format_predictions(predictions, model=self)
+        return super().get_predictions(spectra_processing_strategy)
 
     @property
     def inputs(self) -> list[str]:
@@ -247,62 +284,250 @@ class SpectraModel(Model):
         return CRUDClient["SpectraModel"](client, MODELS_URL, SpectraModel)
 
 
-class CultivationModel(Model):
-    """Pydantic Model for Cultivation Prediction Model from the API"""
+class CultivationModel(Model, ABC):
+    """Abstract Pydantic Model for Cultivation Prediction Model from the API"""
+
+    dataset: Dataset = Field(alias="dataset")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _validate_model_data(cls, data) -> dict:
+        data["dataset"] = Dataset(**data["dataset"], client=data["client"])
+        return data
+
+    @abstractmethod
+    def predict(
+        self, timestamps: list, inputs: dict, timestamps_unit: str = "s"
+    ) -> dict:
+        """Prediction for CultivationModel"""
+
+    @staticmethod
+    @abstractmethod
+    def requests(client: Client) -> CRUDClient["CultivationModel"]:
+        """CRUDClient for CultivationModel"""
+
+
+class CultivationPropagationModel(CultivationModel):
+    """Pydantic Model for Propagation Model for Cultivation from the API"""
 
     def __init__(self, **data):
         super().__init__(**data)
         self._client = data["client"]
 
     def predict(
-        self, timestamps: list, variables: dict, timestamps_unit: str = "s"
+        self, timestamps: list, inputs: dict, timestamps_unit: str = "s"
     ) -> dict:
-        """Prediction for CultivationModel"""
+        """
+        Predicts the output of a given model for a given set of inputs.
+
+        Parameters:
+        -----------
+        timestamps : list
+            A list of timestamps for prediction.
+        inputs : dict, optional
+            Inputs to be used for prediction. The keys must be the Codes of the
+            input variables, and the values must be lists of the same length as the timestamps.
+        timestamps_unit : str, optional
+            Unit of the timestamps, by default "s".
+            Needs to be one of the following: "s", "m", "h", "d".
+
+        Returns:
+        --------
+        Dictionary with predictions where:
+            key: variable code
+            value: list with predictions for each spectrum
+
+        Example:
+        --------
+        >>> timestamps = [1,2,3,4,5,6,7]
+        >>> inputs = {"var1": [42], "var2": [0.3], "var3": [0.5], "var4": [0,2,3,3,3,3,3]}
+        >>> result = model.predict(timestamps, inputs, timestamps_unit="d")
+        >>> print(result)
+        {'var2': [pred1, pred2, pred3, pred4, pred5, pred6, pred7],
+        'var3': [pred1, pred2, pre3, pred4, pred5, pred6, pred7]}
+
+        """
 
         if not self.success:
             raise ModelPredictionException(
                 f"{self.name} is not ready for prediction. The current status is {self.status}"
             )
 
-        data_processing_strategy = CultivationPreprocessor(
+        data_processing_strategy = CultivationPropagationPreprocessor(
             timestamps=timestamps,
             timestamps_unit=timestamps_unit,
-            inputs=variables,
+            inputs=inputs,
             model=self,
         )
-        json_data = Preprocessor(data_processing_strategy).convert_to_request()
 
-        predict_url = f"{PREDICT_URL}/{self.id}/predict"
-
-        predictions = []
-        for prediction_data in json_data:
-            try:
-                response = self._client.post(predict_url, prediction_data)
-
-                # in case of an error in the response (not HTTP)
-                if "error" in response.json():
-                    raise ValueError(response.json()["error"])
-
-            except Exception as ex:
-                raise ex
-
-            predictions.append(PredictResponse(**response.json()))
-
-        return format_predictions(predictions, model=self)
+        return super().get_predictions(data_processing_strategy)
 
     @staticmethod
-    def requests(client: Client) -> CRUDClient["CultivationModel"]:
+    def requests(client: Client) -> CRUDClient["CultivationPropagationModel"]:
         # pylint: disable=missing-function-docstring
-        return CRUDClient["CultivationModel"](client, MODELS_URL, CultivationModel)
+        return CRUDClient["CultivationPropagationModel"](
+            client, MODELS_URL, CultivationPropagationModel
+        )
 
 
-MODEL_MAP = {
-    "373c173a-1f23-4e56-874e-90ca4702ec0d": SpectraModel,
-    "04a324da-13a5-470b-94a1-bda6ac87bb86": CultivationModel,
-}
+class CultivatioHistoricalModel(CultivationModel):
+    """Pydantic Model for Historical Model for Cultivation from the API"""
+
+    def __init__(self, **data):
+        super().__init__(**data)
+        self._client = data["client"]
+
+    def predict(
+        self, timestamps: list, inputs: dict, timestamps_unit: str = "s"
+    ) -> dict:
+        """
+        Predicts the output of a given model for a given set of inputs.
+
+        Parameters:
+        -----------
+        timestamps : list
+            A list of timestamps for prediction.
+        inputs : dict, optional
+            Inputs to be used for prediction. The keys must be the Codes of the
+            input variables, and the values must be lists of the same length as the timestamps.
+        timestamps_unit : str, optional
+            Unit of the timestamps, by default "s".
+            Needs to be one of the following: "s", "m", "h", "d".
+
+        Returns:
+        --------
+        Dictionary with predictions where:
+            key: variable code
+            value: list with predictions for each spectrum
+
+        Example:
+        --------
+        >>> timestamps = [1,2,3,4,5,6,7]
+        >>> inputs = {"var1": [42], "var2": [0.3], "var3": [0.5], "var4": [0,2,3,3,3,3,3]}
+        >>> result = model.predict(timestamps, inputs, timestamps_unit="d")
+        >>> print(result)
+        {'output1': [pred1], 'output2': [pred2]}
+
+        """
+
+        if not self.success:
+            raise ModelPredictionException(
+                f"{self.name} is not ready for prediction. The current status is {self.status}"
+            )
+
+        data_processing_strategy = CultivationHistoricalPreprocessor(
+            timestamps=timestamps,
+            timestamps_unit=timestamps_unit,
+            inputs=inputs,
+            model=self,
+        )
+
+        return super().get_predictions(data_processing_strategy)
+
+    @staticmethod
+    def requests(client: Client) -> CRUDClient["CultivatioHistoricalModel"]:
+        # pylint: disable=missing-function-docstring
+        return CRUDClient["CultivatioHistoricalModel"](
+            client, MODELS_URL, CultivatioHistoricalModel
+        )
 
 
-class Project(BaseModel):
+class ModelFactory:
+    """Factory for Model, given the process unit id and model type"""
+
+    MODEL_MAP = {
+        "373c173a-1f23-4e56-874e-90ca4702ec0d": SpectraModel,
+        "04a324da-13a5-470b-94a1-bda6ac87bb86": CultivationModel,
+    }
+
+    def __init__(self, process_unit_id):
+        self._process_unit_id = process_unit_id
+
+    def get_model(self, **kwargs) -> Type[Model]:
+        """Get the model type from the process unit id"""
+
+        if self._process_unit_id not in self.MODEL_MAP:
+            raise NotImplementedError(
+                f"Process unit id {self._process_unit_id} is not currently supported"
+            )
+
+        model = self.MODEL_MAP[self._process_unit_id]
+
+        if "model_type" in kwargs and model == CultivationModel:
+            if kwargs["model_type"] == "propagation":
+                model = CultivationPropagationModel
+            elif kwargs["model_type"] == "historical":
+                model = CultivatioHistoricalModel
+
+        return model
+
+
+class Project(BaseModel, ABC):
+    """Abstract Pydantic Model for a DHL Project from the API"""
+
+    id: str = Field(alias="id")
+    name: str = Field(alias="name")
+    description: str = Field(alias="description")
+    process_unit_id: str = Field(alias="processUnitId")
+    _client: Client = PrivateAttr()
+
+    @abstractmethod
+    def get_models(self, model_name: Optional[str] = None) -> Result[Model]:
+        """Get the models of the project from the API"""
+
+    @abstractmethod
+    def _get_model_query_params(
+        self, model_name: Optional[str] = None
+    ) -> dict[str, str]:
+        """Get the query params for the models"""
+
+    @staticmethod
+    @abstractmethod
+    def requests(client: Client) -> CRUDClient["Project"]:
+        """Resquests abstract method for Project Types"""
+
+
+class SpectraProject(Project):
+    """Pydantic Model for a DHL Project from the API"""
+
+    def __init__(self, **data):
+        super().__init__(**data)
+        self._client = data["client"]
+
+    def get_models(self, model_name: Optional[str] = None) -> Result[Model]:
+        """Get the models of the project from the API"""
+
+        # maube pass it as a parameter
+        model = ModelFactory(self.process_unit_id).get_model()
+
+        models = model.requests(self._client)
+        query_params = self._get_model_query_params(model_name=model_name)
+
+        results = Result[model](
+            limit=5,
+            query_params=query_params,
+            requests=models,
+        )
+
+        return results
+
+    def _get_model_query_params(
+        self, model_name: Optional[str] = None
+    ) -> dict[str, str]:
+        query_params = {"filterBy[projectId]": self.id}
+
+        if model_name is not None:
+            query_params.update({"filterBy[name]": model_name})
+
+        return query_params
+
+    @staticmethod
+    def requests(client: Client) -> CRUDClient["SpectraProject"]:
+        # pylint: disable=missing-function-docstring
+        return CRUDClient["SpectraProject"](client, PROJECTS_URL, SpectraProject)
+
+
+class CultivationProject(Project):
     """Pydantic Model for a DHL Project from the API"""
 
     id: str = Field(alias="id")
@@ -315,39 +540,57 @@ class Project(BaseModel):
         super().__init__(**data)
         self._client = data["client"]
 
-    def get_models(self, offset: int = 0, name: Optional[str] = None) -> Result[Model]:
+    def get_models(
+        self,
+        model_name: Optional[str] = None,
+        model_type: Literal["propagation", "historical"] = "propagation",
+    ) -> Result[Model]:
         """Get the models of the project from the API"""
 
-        model_type = MODEL_MAP[self.process_unit_id]
+        if model_type not in ["propagation", "historical"]:
+            raise ValueError(
+                f"model_type must be either propagation or historical, got {model_type}"
+            )
 
-        query_params = {"filterBy[projectId]": self.id}
-        if name is not None:
-            query_params.update({"filterBy[name]": name})
+        query_params = self._get_model_query_params(
+            model_name=model_name, model_type=model_type
+        )
 
-        if model_type is not SpectraModel:
-            # get templateIds for propagation models
-            template_query_params = {
-                "filterByTag[type]": "propagation",
-                "archived": "any",
-            }
-            template_list = self._client.get(
-                TEMPLATES_URL, template_query_params
-            ).json()
-            template_ids = get_id_list(template_list)
+        model = ModelFactory(self.process_unit_id).get_model(model_type=model_type)
+        models = model.requests(self._client)
 
-            query_params.update({"filterBy[templateId]": "|".join(template_ids)})
-
-        models = model_type.requests(self._client)
-
-        results = Result[model_type](
-            offset=offset,
+        results = Result[model](
             limit=5,
             query_params=query_params,
             requests=models,
         )
         return results
 
+    def _get_model_query_params(
+        self,
+        model_name: Optional[str] = None,
+        model_type: Literal["propagation", "historical"] = "propagation",
+    ) -> dict[str, str]:
+        query_params = {"filterBy[projectId]": self.id}
+
+        if model_name is not None:
+            query_params.update({"filterBy[name]": model_name})
+
+        # get templateIds for propagation models
+        template_query_params = {
+            "filterByTag[type]": model_type,
+            "archived": "any",
+        }
+        template_list = self._client.get(TEMPLATES_URL, template_query_params).json()
+        template_ids = get_id_list(template_list)
+
+        query_params.update({"filterBy[templateId]": "|".join(template_ids)})
+
+        return query_params
+
     @staticmethod
-    def requests(client: Client) -> CRUDClient["Project"]:
+    def requests(client: Client) -> CRUDClient["CultivationProject"]:
         # pylint: disable=missing-function-docstring
-        return CRUDClient["Project"](client, PROJECTS_URL, Project)
+        return CRUDClient["CultivationProject"](
+            client, PROJECTS_URL, CultivationProject
+        )

@@ -11,7 +11,7 @@ Classes:
 """
 
 
-from typing import Literal, Optional, Dict, Any
+from typing import Literal, Optional, Dict, Any, Type, TypeVar
 from urllib.parse import urlencode
 
 from requests import Response
@@ -22,15 +22,18 @@ from requests.adapters import HTTPAdapter
 from dhl_sdk.authentication import APIKeyAuthentication
 
 from dhl_sdk.crud import Result
-from dhl_sdk.entities import Project
+from dhl_sdk.entities import Project, SpectraProject, CultivationProject
 from dhl_sdk._utils import urljoin
 
 
-SPECTRA_UNIT_ID = "373c173a-1f23-4e56-874e-90ca4702ec0d"
-UNIT_ID_MAP = {
-    "cultivation": "04a324da-13a5-470b-94a1-bda6ac87bb86",
+PROJECT_TYPE_MAP = {
+    "cultivation": ("04a324da-13a5-470b-94a1-bda6ac87bb86", CultivationProject),
+    "spectroscopy": ("373c173a-1f23-4e56-874e-90ca4702ec0d", SpectraProject),
     # Add other unit ids here
 }
+
+
+T = TypeVar("T", bound=Project)
 
 
 class Client:
@@ -134,12 +137,22 @@ class Client:
 
         return response
 
+
+class PredictionClient(Client):
+    """Client for the Prediction functionalities of DHL API
+
+    Parameters
+    ----------
+    auth_key : APIKeyAuthentication
+        An instance of the APIKeyAuthentication class containing the user's API key."""
+
     def get_projects(
         self,
-        name: str = None,
-        unit_id: str = None,
+        project_type: Type[T],
+        name: Optional[str] = None,
+        unit_id: Optional[str] = None,
         offset: int = 0,
-    ) -> Result[Project]:
+    ) -> Result[T]:
         """Retrieve the available projects for the user
 
         Parameters
@@ -150,6 +163,8 @@ class Client:
             Filter projects by process unit ID, by default None
         offset : int, optional
             The offset for pagination, must be a non-negative integer, by default 0
+        project_type : T, optional
+            The type of project to retrieve, by default Project
 
         Returns
         -------
@@ -169,8 +184,8 @@ class Client:
             if value is not None
         }
 
-        projects = Project.requests(self)
-        result = Result[Project](
+        projects = project_type.requests(self)
+        result = Result[project_type](
             offset=offset,
             limit=10,
             query_params=filter_params,
@@ -178,45 +193,6 @@ class Client:
         )
 
         return result
-
-
-class SpectraHowClient:
-    """Client for the DHL SpectraHow API
-
-    Parameters
-    ----------
-    auth_key : APIKeyAuthentication
-        An instance of the APIKeyAuthentication class containing the user's API key."""
-
-    def __init__(self, auth_key: APIKeyAuthentication, base_url: str):
-        self._client = Client(auth_key, base_url)
-
-    def get_projects(
-        self,
-        name: str = None,
-        offset: int = 0,
-    ) -> Result[Project]:
-        """
-        Retrieves an iterable of Spectra projects from the DHL API.
-
-        Parameters
-        ----------
-        name : str, optional
-            A string to filter projects by name.
-        offset : int, optional
-            An integer representing the number of projects to skip before returning results.
-
-        Returns
-        -------
-        Result
-            An Iterable object containing the retrieved projects
-        """
-
-        return self._client.get_projects(
-            name=name,
-            offset=offset,
-            unit_id=SPECTRA_UNIT_ID,
-        )
 
 
 class DataHowLabClient:
@@ -228,13 +204,12 @@ class DataHowLabClient:
         An instance of the APIKeyAuthentication class containing the user's API key."""
 
     def __init__(self, auth_key: APIKeyAuthentication, base_url: str):
-        self._client = Client(auth_key, base_url)
+        self._client = PredictionClient(auth_key, base_url)
 
     def get_projects(
         self,
-        name: str = None,
-        offset: int = 0,
-        project_type: Literal["cultivation"] = "cultivation",
+        name: Optional[str] = None,
+        project_type: Literal["cultivation", "spectroscopy"] = "cultivation",
     ) -> Result[Project]:
         """
         Retrieves an iterable of Spectra projects from the DHL API.
@@ -245,8 +220,8 @@ class DataHowLabClient:
             A string to filter projects by name.
         offset : int, optional
             An integer representing the number of projects to skip before returning results.
-        project_type : Literal["cultivation", "cell selection", "polishing"], optional
-            The type of project to retrieve, by default None
+        project_type : Literal["cultivation"], optional
+            The type of project to retrieve, by default 'cultivation'
 
         Returns
         -------
@@ -254,17 +229,46 @@ class DataHowLabClient:
             An Iterable object containing the retrieved projects
         """
 
-        if project_type is not None:
-            if project_type not in UNIT_ID_MAP:
-                raise ValueError(
-                    f"Type must be one of {list(UNIT_ID_MAP.keys())}, but got '{project_type}'"
-                )
-            unit_id = UNIT_ID_MAP[project_type]
-        else:
-            unit_id = None
+        if project_type not in PROJECT_TYPE_MAP:
+            raise ValueError(
+                f"Type must be one of {list(PROJECT_TYPE_MAP.keys())}, but got '{project_type}'"
+            )
+
+        (unit_id, project_class) = PROJECT_TYPE_MAP[project_type]
 
         return self._client.get_projects(
             name=name,
-            offset=offset,
             unit_id=unit_id,
+            project_type=project_class,
         )
+
+
+class SpectraHowClient(DataHowLabClient):
+    """Client for the DHL SpectraHow API
+
+    Parameters
+    ----------
+    auth_key : APIKeyAuthentication
+        An instance of the APIKeyAuthentication class containing the user's API key."""
+
+    def get_projects(
+        self,
+        name: Optional[str] = None,
+    ) -> Result[Project]:
+        """
+        Retrieves an iterable of Spectra projects from the DHL API.
+
+        Parameters
+        ----------
+        name : str, optional
+            A string to filter projects by name.
+        offset : int, optional
+            An integer representing the number of projects to skip before returning results.
+
+        Returns
+        -------
+        Result
+            An Iterable object containing the retrieved projects
+        """
+
+        return super().get_projects(name, "spectroscopy")
