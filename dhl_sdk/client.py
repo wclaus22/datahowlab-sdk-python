@@ -1,15 +1,16 @@
-"""Cliente for the DHL SpectraHow API
+"""Client for the DHL SpectraHow API
 
 This module defines the `Client` and `SpectraHowClient` classes, 
 which are used to interact with the DHL SpectraHow API.
 
 Classes:
-    - Client: provides a base implementation for making HTTP requests to the API, 
-    - SpectraHowClient: extends 'Client' class with additional methods for specific
-      Spectra projects.
-
+    - Client: provides a base implementation for making HTTP requests to the API
+    - PredictionClient: extends the 'Client' class with additional methods for fetching
+        data from the API, to be used by composition within the 'DataHowLabClient' class
+    - DataHowLabClient: main client to interact with the DHL API
+    - SpectraHowClient: extends the DataHowLabClient to provide a client specifically for
+        spectroscopy projects
 """
-
 
 from typing import Literal, Optional, Dict, Any, Type, TypeVar
 from urllib.parse import urlencode
@@ -39,16 +40,22 @@ T = TypeVar("T", bound=Project)
 class Client:
     """
     A client for interacting with the DataHowLab API.
-
-    Parameters
-    ----------
-    auth_key : APIKeyAuthentication
-        An instance of the APIKeyAuthentication class containing the user's API key.
-    base_url : str
-        The URL address of the datahowlab application
     """
 
-    def __init__(self, auth_key: APIKeyAuthentication, base_url: str):
+    def __init__(self, auth_key: APIKeyAuthentication, base_url: str) -> None:
+        """
+        Parameters
+        ----------
+        auth_key : APIKeyAuthentication
+            An instance of the APIKeyAuthentication class containing the user's API key.
+        base_url : str
+            The URL address of the datahowlab application
+
+        Returns
+        -------
+        NoneType
+            None
+        """
         self.auth_key = auth_key
         self.base_url = base_url
         self.session = Client._get_retry_requester(total_retries=5, backoff_factor=1)
@@ -144,7 +151,13 @@ class PredictionClient(Client):
     Parameters
     ----------
     auth_key : APIKeyAuthentication
-        An instance of the APIKeyAuthentication class containing the user's API key."""
+        An instance of the APIKeyAuthentication class containing the user's API key.
+
+    Returns
+    -------
+    NoneType
+        None
+    """
 
     def get_projects(
         self,
@@ -196,14 +209,24 @@ class PredictionClient(Client):
 
 
 class DataHowLabClient:
-    """Client for the DHL API
-
-    Parameters
-    ----------
-    auth_key : APIKeyAuthentication
-        An instance of the APIKeyAuthentication class containing the user's API key."""
+    """
+    Client for the DHL API
+    """
 
     def __init__(self, auth_key: APIKeyAuthentication, base_url: str):
+        """
+        Parameters
+        ----------
+        auth_key : APIKeyAuthentication
+            An instance of the APIKeyAuthentication class containing the user's API key.
+        base_url : str
+            The URL address of the datahowlab application
+
+        Returns
+        -------
+        NoneType
+            None
+        """
         self._client = PredictionClient(auth_key, base_url)
 
     def get_projects(
@@ -220,7 +243,7 @@ class DataHowLabClient:
             A string to filter projects by name.
         offset : int, optional
             An integer representing the number of projects to skip before returning results.
-        project_type : Literal["cultivation"], optional
+        project_type : Literal["cultivation", "spectroscopy"], optional
             The type of project to retrieve, by default 'cultivation'
 
         Returns
@@ -249,8 +272,15 @@ class SpectraHowClient(DataHowLabClient):
     Parameters
     ----------
     auth_key : APIKeyAuthentication
-        An instance of the APIKeyAuthentication class containing the user's API key."""
+        An instance of the APIKeyAuthentication class containing the user's API key.
 
+    Returns
+    -------
+    NoneType
+        None
+    """
+
+    # pylint: disable = arguments-differ
     def get_projects(
         self,
         name: Optional[str] = None,

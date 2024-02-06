@@ -22,6 +22,7 @@ Usage:
     headers, which can be added to your requests.
 
 """
+
 from typing import Optional
 import os
 
@@ -33,14 +34,20 @@ class APIKeyAuthentication:
 
     The API Key can be provided as an argument or retrieved from the
     environment variable defined as 'DHL_API_KEY'
-
-    Parameters
-    ----------
-    api_key : str, optional
-        API Key to use to authenticate with the DHL API
     """
 
     def __init__(self, api_key: Optional[str] = None):
+        """
+        Parameters
+        ----------
+        api_key : str, optional
+            API Key to use to authenticate with the DHL API
+
+        Returns
+        -------
+        NoneType
+            None
+        """
         self.api_key = self._get_api_key(api_key)
 
     def get_headers(self) -> dict[str, str]:

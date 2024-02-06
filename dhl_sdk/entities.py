@@ -145,7 +145,7 @@ class SpectraDataset(Dataset):
 
 
 class Model(BaseModel, ABC):
-    """Pydantic Model for Prediction Model from the API"""
+    """Pydantic BaseModel for predictive models from the API"""
 
     id: str = Field(alias="id")
     name: str = Field(alias="name")
@@ -463,7 +463,7 @@ class ModelFactory:
 
 
 class Project(BaseModel, ABC):
-    """Abstract Pydantic Model for a DHL Project from the API"""
+    """Abstract class for a DHL Project"""
 
     id: str = Field(alias="id")
     name: str = Field(alias="name")
@@ -497,7 +497,6 @@ class SpectraProject(Project):
     def get_models(self, model_name: Optional[str] = None) -> Result[Model]:
         """Get the models of the project from the API"""
 
-        # maube pass it as a parameter
         model = ModelFactory(self.process_unit_id).get_model()
 
         models = model.requests(self._client)
